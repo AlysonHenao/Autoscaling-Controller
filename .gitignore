@@ -1,0 +1,22 @@
+# Bytecode y cachés de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+ENV/
+
+# Entornos de desarrollo / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Seguridad y credenciales locales
+.env
+*.pem
+credentials
