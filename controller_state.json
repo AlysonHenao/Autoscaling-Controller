@@ -1,10 +1,11 @@
 {
   "controller_id": "cms-autoscaler-primary",
-  "current_capacity": 4,
-  "last_action_timestamp": 1790119027.48,
-  "cooldown_expires_at": 1790119267.48,
-  "scale_down_consecutive_low": 3,
-  "last_observed_cpu": 0.15,
+  "current_capacity": 1,
+  "last_action_timestamp": 1790607370.494254,
+  "cooldown_expires_at": 1790607490.494254,
+  "scale_down_consecutive_low": 0,
+  "last_observed_cpu": 85.0,
   "last_decision": "MAINTAIN_CAPACITY",
-  "last_updated": 1790119398.8806424
+  "last_updated": 1790607379.9968941,
+  "last_observed_requests": 150.0
 }

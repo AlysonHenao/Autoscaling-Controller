@@ -14,19 +14,28 @@ DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME", "AutoScalingControllerSta
 MIN_CAPACITY = 1
 MAX_CAPACITY = 5
 
-# --- Metric Configuration (Criterio Único: CPU) ---
+# --- Metric 1: CPU Utilization (Criterio de Saturación de Cómputo) ---
 METRIC_NAME = "CPUUtilization"
+METRIC_CPU_NAME = "CPUUtilization"
 METRIC_NAMESPACE = "AWS/EC2"
+METRIC_CPU_NAMESPACE = "AWS/EC2"
 STATISTIC = "Average"
+STATISTIC_CPU = "Average"
 SAMPLE_PERIOD_SECONDS = 60          # Período de muestreo en CloudWatch (1 minuto)
 EVALUATION_INTERVAL_SECONDS = 60    # Frecuencia de ciclo del controlador
-
-# --- HPA & Target Tracking Policy Parameters ---
-# Basado en Kubernetes Horizontal Pod Autoscaler (HPA) y AWS Target Tracking.
-# Objetivo nominal de diseño: 70.0% (antes del codo de saturación de Kleinrock).
-# Sobrescribible por variable de entorno (ej. TARGET_CPU=40.0 para pruebas de laboratorio).
 TARGET_CPU_UTILIZATION = float(os.getenv("TARGET_CPU", "70.0"))
-TOLERANCE_BAND = 0.10               # Banda de tolerancia (+/- 10% alrededor del target: ej. 63% - 77%)
+
+# --- Metric 2: Request Count Per Target (Criterio de Carga de Tráfico ALB) ---
+# Mide peticiones por minuto servidas por cada instancia detrás del ALB
+METRIC_REQ_NAME = "RequestCountPerTarget"
+METRIC_REQ_NAMESPACE = "AWS/ApplicationELB"
+STATISTIC_REQ = "Sum"
+TARGET_REQUEST_COUNT_PER_TARGET = float(os.getenv("TARGET_REQUESTS_PER_TARGET", "100.0"))
+ENABLE_MULTI_METRIC = os.getenv("ENABLE_MULTI_METRIC", "true").lower() in ("true", "1", "yes")
+ALB_TARGET_GROUP_DIMENSION = os.getenv("ALB_TARGET_GROUP_DIMENSION", "")
+
+# --- HPA & Multi-Metric Policy Parameters ---
+TOLERANCE_BAND = 0.10               # Banda de tolerancia (+/- 10% alrededor de los targets)
 
 
 # --- Anti-Overprovisioning & Stabilization Guards ---

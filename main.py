@@ -4,9 +4,10 @@ Ejecuta el ciclo continuo de retroalimentación:
 observe -> analyze -> decide -> act -> observe again
 
 Garantiza:
+- Control multi-métrica formal (Kubernetes HPA con CPU y RequestCountPerTarget del ALB).
 - Explicabilidad y registro estructurado según el reto SI3016.
 - Tolerancia a caídas mediante persistencia en DynamoDB (Crash-Recovery).
-- Control autónomo de capacidad (1 a 5 instancias) basado en Kubernetes HPA.
+- Control autónomo de capacidad (1 a 5 instancias) sin políticas gestionadas por AWS.
 """
 import argparse
 import sys
@@ -26,15 +27,19 @@ def run_controller_cycle(
     actuator: AWSActuator,
     state_store: StateStore,
     logger: ControllerLogger,
-    simulated_cpu: Optional[float] = None
+    simulated_cpu: Optional[float] = None,
+    simulated_req: Optional[float] = None
 ) -> dict:
     """
     Ejecuta un ciclo individual del bucle MAPE-K.
     """
     cycle_start_time = time.time()
 
-    # 1. OBSERVE (Monitorear métricas e infraestructura)
-    cpu_data = monitor.get_cpu_utilization(simulated_value=simulated_cpu)
+    # 1. OBSERVE (Monitorear métricas agregadas e infraestructura)
+    all_metrics = monitor.get_all_metrics(simulated_cpu=simulated_cpu, simulated_req=simulated_req)
+    cpu_data = all_metrics["cpu"]
+    req_data = all_metrics["requests"]
+
     infra_state = actuator.get_current_infrastructure_state()
     persisted_state = state_store.load_state()
 
@@ -43,12 +48,14 @@ def run_controller_cycle(
     persisted_state["current_capacity"] = current_capacity
 
     current_cpu = cpu_data["cpu_utilization"]
+    current_req = req_data.get("requests_per_target")
 
-    # 2 & 3. ANALYZE & DECIDE (Motor de decisión HPA + Anti-Sobreprovisionamiento)
+    # 2 & 3. ANALYZE & DECIDE (Motor HPA Multi-métrica + Anti-Sobreprovisionamiento)
     decision, target_capacity, justification, updated_state = policy.evaluate(
         current_cpu=current_cpu,
         current_capacity=current_capacity,
         state=persisted_state,
+        current_requests=current_req,
         current_time=cycle_start_time
     )
 
@@ -78,13 +85,18 @@ def run_controller_cycle(
         "is_estimated": cpu_data["is_estimated"]
     }
 
+    metrics_payload = {
+        "CPUUtilization": current_cpu,
+        "CPU_source": cpu_data["source"]
+    }
+    if current_req is not None:
+        metrics_payload["RequestCountPerTarget"] = current_req
+        metrics_payload["Requests_source"] = req_data.get("source", "AWS/CloudWatch_ALB")
+
     log_entry = logger.log_cycle(
         decision=decision,
         justification=justification,
-        metrics={
-            "CPUUtilization": current_cpu,
-            "metric_source": cpu_data["source"]
-        },
+        metrics=metrics_payload,
         observation_interval=observation_interval,
         existing_capacity=current_capacity,
         existing_state=infra_state,
@@ -92,6 +104,7 @@ def run_controller_cycle(
         action_result=action_result,
         extra_metadata={
             "target_cpu": config.TARGET_CPU_UTILIZATION,
+            "target_requests": config.TARGET_REQUEST_COUNT_PER_TARGET,
             "tolerance_band": config.TOLERANCE_BAND,
             "stabilization_counter": updated_state.get("scale_down_consecutive_low", 0),
             "cooldown_remaining_sec": max(0, int(updated_state.get("cooldown_expires_at", 0) - cycle_start_time))
@@ -101,15 +114,19 @@ def run_controller_cycle(
     return log_entry
 
 def main():
-    parser = argparse.ArgumentParser(description="Auto-Scaling Controller Autónomo (SI3016)")
+    parser = argparse.ArgumentParser(description="Auto-Scaling Controller Autónomo Multi-Métrica (SI3016)")
     parser.add_argument("--once", action="store_true", help="Ejecuta un único ciclo y termina")
     parser.add_argument("--interval", type=int, default=config.EVALUATION_INTERVAL_SECONDS, help="Segundos entre ciclos")
     parser.add_argument("--simulate-cpu", type=float, default=None, help="Valor de CPU simulado para pruebas locales")
+    parser.add_argument("--simulate-requests", type=float, default=None, help="Valor de peticiones/target simulado para pruebas")
     args = parser.parse_args()
 
     logger = ControllerLogger()
-    logger.info("Iniciando Auto-Scaling Controller Autónomo para CMS Web Cluster...")
-    logger.info(f"Target CPU: {config.TARGET_CPU_UTILIZATION}% | Tolerancia: +/-{int(config.TOLERANCE_BAND*100)}% | Rango instancias: [{config.MIN_CAPACITY}, {config.MAX_CAPACITY}]")
+    logger.info("Iniciando Auto-Scaling Controller Autónomo Multi-Métrica para CMS Web Cluster...")
+    logger.info(
+        f"Target CPU: {config.TARGET_CPU_UTILIZATION}% | Target Req/Target: {config.TARGET_REQUEST_COUNT_PER_TARGET} | "
+        f"Tolerancia: +/-{int(config.TOLERANCE_BAND*100)}% | Rango instancias: [{config.MIN_CAPACITY}, {config.MAX_CAPACITY}]"
+    )
 
     monitor = CloudWatchMonitor()
     policy = HPAPolicyEngine()
@@ -118,7 +135,10 @@ def main():
 
     # Cargar y verificar estado inicial
     initial_state = state_store.load_state()
-    logger.info(f"Estado inicial recuperado (Crash Recovery Check): Capacidad={initial_state['current_capacity']}, CooldownHasta={initial_state['cooldown_expires_at']}")
+    logger.info(
+        f"Estado inicial recuperado (Crash Recovery Check): Capacidad={initial_state['current_capacity']}, "
+        f"CooldownHasta={initial_state['cooldown_expires_at']}"
+    )
 
     try:
         while True:
@@ -128,7 +148,8 @@ def main():
                 actuator=actuator,
                 state_store=state_store,
                 logger=logger,
-                simulated_cpu=args.simulate_cpu
+                simulated_cpu=args.simulate_cpu,
+                simulated_req=args.simulate_requests
             )
 
             if args.once:
